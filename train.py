@@ -13,7 +13,7 @@ import torch.multiprocessing as mp
 from torch.distributed import init_process_group
 from torch.nn.parallel import DistributedDataParallel
 from env import AttrDict, build_env
-from meldataset import MelDataset, mel_spectrogram, get_dataset_filelist
+from meldataset import MelDataset, MelKoKoDataset, mel_spectrogram, get_dataset_filelist
 from models import Generator, MultiPeriodDiscriminator, MultiScaleDiscriminator, feature_loss, generator_loss,\
     discriminator_loss
 from utils import plot_spectrogram, scan_checkpoint, load_checkpoint, save_checkpoint
@@ -71,6 +71,31 @@ def train(rank, a, h):
     scheduler_g = torch.optim.lr_scheduler.ExponentialLR(optim_g, gamma=h.lr_decay, last_epoch=last_epoch)
     scheduler_d = torch.optim.lr_scheduler.ExponentialLR(optim_d, gamma=h.lr_decay, last_epoch=last_epoch)
 
+    # load KOKO Dataset
+    kokodatasets = MelKoKoDataset(a.dataset_dir, "../no7singing/wav_PT_22k")
+    koko_size = len(kokodatasets)
+    test_size = int(koko_size * 0.1)
+    split_size = [koko_size - test_size, test_size]
+    trainset, validset = torch.utils.data.random_split(
+        kokodatasets, split_size,
+        generator=torch.Generator().manual_seed(42))
+    
+    train_sampler = None
+    train_loader = DataLoader(trainset, num_workers=h.num_workers, shuffle=False,
+                              sampler=train_sampler,
+                              batch_size=h.batch_size,
+                              pin_memory=True,
+                              drop_last=True)
+
+    validation_loader = DataLoader(validset, num_workers=1, shuffle=False,
+                                    sampler=None,
+                                    batch_size=1,
+                                    pin_memory=True,
+                                    drop_last=True)
+    sw = SummaryWriter(os.path.join(a.checkpoint_path, 'logs'))
+
+
+    """
     training_filelist, validation_filelist = get_dataset_filelist(a)
 
     trainset = MelDataset(training_filelist, h.segment_size, h.n_fft, h.num_mels,
@@ -98,6 +123,7 @@ def train(rank, a, h):
                                        drop_last=True)
 
         sw = SummaryWriter(os.path.join(a.checkpoint_path, 'logs'))
+    """
 
     generator.train()
     mpd.train()
@@ -181,6 +207,7 @@ def train(rank, a, h):
                 # Tensorboard summary logging
                 if steps % a.summary_interval == 0:
                     sw.add_scalar("training/gen_loss_total", loss_gen_all, steps)
+                    sw.add_scalar("training/disc_loss_total", loss_disc_all, steps)
                     sw.add_scalar("training/mel_spec_error", mel_error, steps)
 
                 # Validation
@@ -231,6 +258,7 @@ def main():
 
     parser.add_argument('--group_name', default=None)
     parser.add_argument('--input_wavs_dir', default='LJSpeech-1.1/wavs')
+    parser.add_argument("--dataset_dir", default="../koko2022")
     parser.add_argument('--input_mels_dir', default='ft_dataset')
     parser.add_argument('--input_training_file', default='LJSpeech-1.1/training.txt')
     parser.add_argument('--input_validation_file', default='LJSpeech-1.1/validation.txt')

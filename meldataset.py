@@ -1,6 +1,7 @@
 import math
 import os
 import random
+import pathlib
 import torch
 import torch.utils.data
 import numpy as np
@@ -166,3 +167,72 @@ class MelDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.audio_files)
+
+
+class MelKoKoDataset(torch.utils.data.Dataset):
+    def __init__(self, dataset_dir, wav24k_dir):
+        self.dataset_dir = pathlib.Path(dataset_dir)
+        self.wav24k_dir  = pathlib.Path(wav24k_dir)
+
+        self.mel_list = []
+        self.melloss_list = []
+        self.pos_list = []
+        self.wav_list = []
+
+        self.idx_file_dict = {}
+        self.len = 0
+
+        for i in range(1, 52):
+            # from 1 to 51 (inclusive)
+            mel_z = np.load(self.dataset_dir / ("%02d_mel.npz" % i))
+            melloss_z = np.load(self.dataset_dir / ("%02d_melloss.npz" % i))
+            pos_z = np.load(self.dataset_dir / ("%02d_pos.npz" % i))
+
+            audio, sampling_rate = load_wav(self.wav24k_dir / ("%02d.wav" % i))
+            audio = audio / MAX_WAV_VALUE
+            self.wav_list.append(torch.FloatTensor(audio))
+
+            np_mel = mel_z["arr_0"]
+            np_melloss = melloss_z["arr_0"]
+            np_pos = pos_z["arr_0"]
+
+            mel = torch.tensor(np_mel)
+            melloss = torch.tensor(np_melloss)
+            pos = torch.tensor(np_pos)
+
+            self.mel_list.append(mel)
+            self.melloss_list.append(melloss)
+            self.pos_list.append(pos)
+
+            batch_size = mel.size(0)
+            #print("batch_size is", batch_size)
+            for batch_idx in range(batch_size):
+                self.idx_file_dict[self.len + batch_idx] = (i, self.len)
+
+            self.len += batch_size
+            #print("self.len is", self.len)
+
+        #print(len(self.mel_list))
+        pass
+
+    def __getitem__(self, idx):
+        file_idx, batch_base = self.idx_file_dict[idx]
+        #print(idx)
+        #print(file_idx)
+        #print(batch_base)
+
+        file_array_idx = file_idx - 1
+        local_idx = idx - batch_base
+        mel = self.mel_list[file_array_idx][local_idx]
+        mel_loss = self.melloss_list[file_array_idx][local_idx]
+        pos = self.pos_list[file_array_idx][local_idx]
+
+        audio_start = pos[0]
+        audio_end   = pos[1]
+        audio = self.wav_list[file_array_idx][audio_start:audio_end]
+
+        return mel, audio, file_array_idx, mel_loss
+
+    def __len__(self):
+        return self.len
+    pass
